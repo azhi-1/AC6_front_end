@@ -1,0 +1,17 @@
+{
+    "id": "6f3a929a-4e0d-428c-babe-8c7e5fee796c",
+    "scriptName": "[折叠]完整变量更新",
+    "findRegex": "/<update(?:variable)?>\\s*([\\s\\S]*?)\\s*<\\/update(?:variable)?>/gi",
+    "replaceString": "<details>\n<summary>变量更新情况</summary>\n$1\n</details>",
+    "trimStrings": [],
+    "placement": [
+        2
+    ],
+    "disabled": false,
+    "markdownOnly": true,
+    "promptOnly": false,
+    "runOnEdit": false,
+    "substituteRegex": 0,
+    "minDepth": null,
+    "maxDepth": null
+}

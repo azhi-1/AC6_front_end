@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AC6 OS Interface</title>
+<!-- 引入技术感字体与图标库 -->
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<!-- adjust_iframe_height 依赖 jQuery + Lodash（与 util/iframe_srcdoc.html 一致） -->
+<script src="https://unpkg.com/jquery@3/dist/jquery.min.js"></script>
+<script src="https://unpkg.com/lodash@4/lodash.min.js"></script>
+<script src="https://testingcf.jsdelivr.net/gh/n0vi028/JS-Slash-Runner/src/iframe/adjust_iframe_height.js"></script>
+<style>
+    /* ================= 核心变量与重置 ================= */
+    :root {
+        --ac-base: #728283;       /* 基础UI色 */
+        --ac-light: #D8E8E9;      /* 高亮/文字色 */
+        --ac-dark: rgba(15, 20, 22, 0.85); /* 深色背景 */
+        --ac-panel: rgba(114, 130, 131, 0.1); /* 面板底色 */
+        --ac-border: rgba(216, 232, 233, 0.3);
+        --ac-alert: #ff4a4a;
+        --font-main: 'Rajdhani', 'Microsoft YaHei', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+
+    /*
+     * 消息楼层 iframe 高度由宿主决定；全屏 fixed + 100vh 会把内容锁死在「矮 iframe」里。
+     * 外层 #ac6-outer 留在文档流中，用 min-height + aspect-ratio 产生可测量的高度，
+     * 配合 adjust_iframe_height.js（读取 body.scrollHeight）把 iframe 撑开。
+     */
+    html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+    #ac6-outer {
+        position: relative;
+        width: 100%;
+        /* 高度随聊天区宽度变化，并保证至少能装下 HUD（可按需改比例或 min-height） */
+        aspect-ratio: 16 / 9;
+        min-height: 520px;
+        /* 勿在此用 vh 做 max-height：在消息 iframe 里 vh 等于矮视口，会再次压扁 */
+    }
+    @supports not (aspect-ratio: 1) {
+        #ac6-outer { min-height: 56.25vw; } /* 16:9 近似 */
+    }
+
+    /* ================= 基础布局与背景 ================= */
+    #ac6-system {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none; /* 穿透点击，不影响底层游戏 */
+        z-index: 9999;
+        font-family: var(--font-main);
+        color: var(--ac-light);
+        overflow: hidden;
+        display: flex;
+    }
+
+    /* 背景图层 (可自定义) */
+    #ac-bg-layer {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background-image: url('https://cdn.imgchest.com/files/d9a8e989a3d3.png');
+        background-size: cover;
+        background-position: center;
+        z-index: -2;
+        transition: background-image 0.5s ease;
+    }
+
+    /* HUD 干扰纹理与扫描线 */
+    #ac-hud-overlay {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: 
+            linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+            linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+        background-size: 100% 4px, 3px 100%;
+        z-index: -1;
+        pointer-events: none;
+        opacity: 0.6;
+    }
+
+    /* 屏幕边缘暗角 */
+    #ac-vignette {
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        box-shadow: inset 0 0 150px rgba(0,0,0,0.9);
+        z-index: -1;
+    }
+
+    /* 恢复交互的容器 */
+    .interactive-layer { pointer-events: auto; }
+
+    /* ================= 左侧主导航 ================= */
+    #ac-sidebar {
+        width: 300px;
+        height: 100%;
+        padding: 40px 0 40px 40px;
+        display: flex;
+        flex-direction: column;
+        background: linear-gradient(90deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0) 100%);
+    }
+
+    .ac-header {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 4px;
+        margin-bottom: 40px;
+        color: var(--ac-light);
+        text-shadow: 0 0 10px rgba(216, 232, 233, 0.5);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .nav-btn {
+        position: relative;
+        padding: 12px 20px;
+        margin-bottom: 8px;
+        background: transparent;
+        border: none;
+        color: var(--ac-base);
+        font-family: var(--font-main);
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 2px;
+        text-align: left;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        width: 85%;
+    }
+
+    .nav-btn::before {
+        content: '';
+        position: absolute;
+        left: 0; top: 0; width: 3px; height: 100%;
+        background: var(--ac-base);
+        transition: all 0.2s;
+        opacity: 0;
+    }
+
+    .nav-btn:hover { color: var(--ac-light); background: rgba(216, 232, 233, 0.05); }
+    
+    .nav-btn.active {
+        color: var(--ac-dark);
+        background: var(--ac-light);
+        box-shadow: 0 0 15px rgba(216, 232, 233, 0.3);
+    }
+    .nav-btn.active i { color: var(--ac-dark); }
+
+    /* ================= 右上角资源区 ================= */
+    #ac-topbar {
+        position: absolute;
+        top: 40px; right: 40px;
+        text-align: right;
+    }
+    .resource-item {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 5px;
+    }
+    .res-label { font-size: 12px; color: var(--ac-base); letter-spacing: 2px; }
+    .res-value { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+
+    /* ================= 主内容区 (模态框/标签页) ================= */
+    #ac-content-area {
+        flex: 1;
+        position: relative;
+        padding: 40px;
+    }
+
+    .ac-view {
+        position: absolute;
+        top: 40px; left: 40px; right: 40px; bottom: 40px;
+        display: none;
+        animation: glitch-in 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+    }
+    .ac-view.active { display: flex; }
+
+    /* 通用面板样式 */
+    .panel {
+        background: var(--ac-dark);
+        border: 1px solid var(--ac-border);
+        padding: 20px;
+        backdrop-filter: blur(4px);
+        position: relative;
+    }
+    /* 倒角切边效果 */
+    .panel-chamfer {
+        clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 15px, 100% 100%, 15px 100%, 0 calc(100% - 15px));
+    }
+
+    /* --- 视图1: 状态总览 --- */
+    #view-status { flex-direction: column; gap: 20px; max-width: 500px; }
+    .stat-row { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(114, 130, 131, 0.3); padding: 8px 0; }
+    .stat-label { color: var(--ac-base); font-size: 14px; }
+    .stat-val { font-weight: 600; }
+    .progress-bar { width: 100%; height: 6px; background: #222; margin-top: 5px; position: relative; }
+    .progress-fill { height: 100%; background: var(--ac-light); transition: width 0.3s; }
+
+    /* --- 视图2: AC整备 (机库) --- */
+    #view-garage { justify-content: space-between; }
+    .garage-left { width: 350px; display: flex; flex-direction: column; gap: 10px; }
+    .part-slot {
+        background: rgba(0,0,0,0.6); border: 1px solid var(--ac-base);
+        padding: 10px 15px; cursor: pointer; transition: 0.2s;
+    }
+    .part-slot:hover { border-color: var(--ac-light); background: rgba(216, 232, 233, 0.1); }
+    .part-type { font-size: 10px; color: var(--ac-base); letter-spacing: 1px; }
+    .part-name { font-size: 16px; font-weight: 600; margin-top: 2px; }
+    
+    .garage-right { width: 350px; align-self: flex-end; }
+    .mech-stats-panel { background: rgba(0,0,0,0.7); border-left: 3px solid var(--ac-light); padding: 20px; }
+    .mech-stat-line { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+    
+    /* --- 视图3: 通讯频道 --- */
+    #view-comms { gap: 20px; height: 60%; max-height: 600px; }
+    .contact-list { width: 250px; display: flex; flex-direction: column; gap: 5px; }
+    .contact-item { 
+        padding: 15px; background: rgba(0,0,0,0.5); border-left: 2px solid var(--ac-base);
+        cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+    }
+    .contact-item:hover, .contact-item.active { border-color: var(--ac-light); background: rgba(216, 232, 233, 0.1); }
+    .contact-name { font-weight: 600; letter-spacing: 1px; }
+    .unread-dot { width: 8px; height: 8px; background: var(--ac-light); border-radius: 50%; display: none; }
+    .unread-dot.show { display: block; box-shadow: 0 0 5px var(--ac-light); }
+    
+    .comm-detail { flex: 1; display: flex; flex-direction: column; }
+    .comm-header { padding: 15px; border-bottom: 1px solid var(--ac-base); font-size: 20px; font-weight: 600; }
+    .comm-body { flex: 1; padding: 20px; display: flex; align-items: center; justify-content: center; color: var(--ac-base); }
+
+    /* --- 视图4: 作战与行动 --- */
+    #view-missions { flex-direction: column; gap: 15px; max-width: 600px; }
+    .mission-card { 
+        background: rgba(0,0,0,0.6); border: 1px solid var(--ac-base); padding: 20px;
+        display: flex; justify-content: space-between; align-items: center;
+    }
+    .mission-title { font-size: 18px; font-weight: 600; color: var(--ac-light); }
+    .mission-type { font-size: 12px; color: var(--ac-base); padding: 2px 6px; border: 1px solid var(--ac-base); margin-left: 10px; }
+    .mission-status { font-size: 14px; letter-spacing: 2px; }
+
+    /* ================= 底部控制栏 ================= */
+    #ac-bottom-bar {
+        position: absolute; bottom: 20px; left: 40px; right: 40px;
+        display: flex; justify-content: space-between; align-items: center;
+        border-top: 1px solid rgba(114, 130, 131, 0.3); padding-top: 10px;
+    }
+    .key-hints { display: flex; gap: 20px; font-size: 12px; color: var(--ac-base); }
+    .key-btn { border: 1px solid var(--ac-base); padding: 2px 6px; border-radius: 2px; color: var(--ac-light); margin-right: 5px; }
+    
+    .upload-btn {
+        background: transparent; border: 1px solid var(--ac-base); color: var(--ac-light);
+        padding: 5px 15px; font-family: var(--font-main); cursor: pointer; font-size: 12px;
+        transition: 0.2s; display: flex; align-items: center; gap: 5px;
+    }
+    .upload-btn:hover { background: var(--ac-light); color: var(--ac-dark); }
+
+    /* ================= 动画 ================= */
+    @keyframes glitch-in {
+        0% { opacity: 0; transform: translateX(-10px) skewX(10deg); filter: drop-shadow(2px 0 0 red) drop-shadow(-2px 0 0 cyan); }
+        50% { opacity: 0.8; transform: translateX(5px) skewX(-5deg); filter: none; }
+        100% { opacity: 1; transform: translateX(0) skewX(0); }
+    }
+</style>
+</head>
+<body>
+
+<div id="ac6-outer">
+<div id="ac6-system">
+    <!-- 背景层 -->
+    <div id="ac-bg-layer"></div>
+    <div id="ac-vignette"></div>
+    <div id="ac-hud-overlay"></div>
+
+    <!-- 左侧导航 -->
+    <div id="ac-sidebar" class="interactive-layer">
+        <div class="ac-header">
+            <i data-lucide="hexagon"></i> SYSTEM_OS
+        </div>
+        <button class="nav-btn active" data-target="view-status">
+            <i data-lucide="activity"></i> 状态总览
+        </button>
+        <button class="nav-btn" data-target="view-garage">
+            <i data-lucide="wrench"></i> AC 整备
+        </button>
+        <button class="nav-btn" data-target="view-comms">
+            <i data-lucide="radio"></i> 通讯频道
+        </button>
+        <button class="nav-btn" data-target="view-missions">
+            <i data-lucide="crosshair"></i> 作战与行动
+        </button>
+    </div>
+
+    <!-- 右上角资源 -->
+    <div id="ac-topbar">
+        <div class="resource-item">
+            <i data-lucide="coins" size="16" color="var(--ac-base)"></i>
+            <span class="res-label">COAM</span>
+            <span class="res-value" id="ui-cage">0</span>
+        </div>
+        <div class="resource-item">
+            <i data-lucide="cpu" size="16" color="var(--ac-base)"></i>
+            <span class="res-label">KRL LVL</span>
+            <span class="res-value" id="ui-krl">1</span>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div id="ac-content-area" class="interactive-layer">
+        
+        <!-- 1. 状态总览 -->
+        <div id="view-status" class="ac-view active panel panel-chamfer">
+            <div style="font-size: 20px; font-weight: 600; margin-bottom: 10px; border-bottom: 1px solid var(--ac-base); padding-bottom: 5px;">PILOT STATUS</div>
+            <div class="stat-row">
+                <span class="stat-label">驾驶员评级</span>
+                <span class="stat-val" id="ui-pilot-rank">UNKNOWN</span>
+            </div>
+            <div>
+                <div class="stat-row" style="border:none; padding-bottom:0;">
+                    <span class="stat-label">AP (HP)</span>
+                    <span class="stat-val"><span id="ui-hp">100</span> / 100</span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" id="bar-hp" style="width: 100%;"></div></div>
+            </div>
+            <div>
+                <div class="stat-row" style="border:none; padding-bottom:0;">
+                    <span class="stat-label">SP (精神力)</span>
+                    <span class="stat-val"><span id="ui-sp">100</span> / 100</span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" id="bar-sp" style="width: 100%; background: #4a90e2;"></div></div>
+            </div>
+            <div>
+                <div class="stat-row" style="border:none; padding-bottom:0;">
+                    <span class="stat-label">珂若尔护盾</span>
+                    <span class="stat-val"><span id="ui-shield-cur">10</span> / <span id="ui-shield-max">10</span></span>
+                </div>
+                <div class="progress-bar"><div class="progress-fill" id="bar-shield" style="width: 100%; background: #4ae28a;"></div></div>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">APM (操作力)</span>
+                <span class="stat-val" id="ui-apm">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">神经同步率</span>
+                <span class="stat-val" id="ui-sync">0%</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">主角默契度</span>
+                <span class="stat-val" id="ui-hero-rapport">0</span>
+            </div>
+
+            <div style="font-size: 20px; font-weight: 600; margin-top: 20px; margin-bottom: 10px; border-bottom: 1px solid var(--ac-base); padding-bottom: 5px;">SYSTEM SYNC</div>
+            <div class="stat-row">
+                <span class="stat-label">交感同操状态</span>
+                <span class="stat-val" id="ui-sync-status" style="color: var(--ac-base);">OFFLINE</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">共鸣效率</span>
+                <span class="stat-val" id="ui-sync-eff">0.00</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">接触方式</span>
+                <span class="stat-val" id="ui-contact-type" style="color: var(--ac-base);">-</span>
+            </div>
+        </div>
+
+        <!-- 2. AC整备 -->
+        <div id="view-garage" class="ac-view">
+            <div class="garage-left" id="ui-parts-list">
+                <!-- 动态生成部件槽 -->
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">R-ARM WEAPON</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">L-ARM WEAPON</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">HEAD</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">CORE</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">EWR</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">BOOSTER</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">GENERATOR</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">LEGS</div>
+                    <div class="part-name">NO DATA</div>
+                </div>
+            </div>
+            
+            <div class="garage-right">
+                <div class="mech-stats-panel panel-chamfer">
+                    <div style="color: var(--ac-base); font-size: 12px; margin-bottom: 10px;">■ 装甲结构</div>
+                    <div class="mech-stat-line"><span>装甲值</span><span id="ui-mech-ap">0 / 0</span></div>
+                    <div class="mech-stat-line"><span>结构值</span><span id="ui-mech-struct">0 / 0</span></div>
+                    <div class="mech-stat-line"><span>珂若尔护盾</span><span id="ui-mech-shield">0 / 0</span></div>
+
+                    <div style="color: var(--ac-base); font-size: 12px; margin-bottom: 10px; margin-top: 15px;">■ AC 性能</div>
+                    <div class="mech-stat-line"><span>装甲等级</span><span id="ui-mech-tier">-</span></div>
+                    <div class="mech-stat-line"><span>机体类型</span><span id="ui-mech-type">-</span></div>
+                    <div class="mech-stat-line"><span>推重比</span><span id="ui-mech-thrust">0.00</span></div>
+                    <div class="mech-stat-line"><span>推重加值</span><span id="ui-mech-thrust-bonus">0</span></div>
+                    <div class="mech-stat-line"><span>电子战评级</span><span id="ui-mech-ewr">0</span></div>
+                    <div class="mech-stat-line"><span>观测效益</span><span id="ui-mech-sensor">0</span></div>
+                    <div class="mech-stat-line"><span>续航回合</span><span id="ui-mech-duration">0</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 通讯频道 -->
+        <div id="view-comms" class="ac-view">
+            <div class="contact-list panel panel-chamfer" id="ui-contact-list">
+                <!-- 动态生成 -->
+                <div class="contact-item active">
+                    <span class="contact-name">NO SIGNAL</span>
+                </div>
+            </div>
+            <div class="comm-detail panel panel-chamfer">
+                <div class="comm-header" id="ui-comm-name">SELECT CHANNEL</div>
+                <div class="comm-body">
+                    <div style="text-align: center; opacity: 0.5;">
+                        <i data-lucide="radio-tower" size="48" style="margin-bottom: 10px;"></i>
+                        <p>AWAITING CONNECTION...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. 作战与行动 -->
+        <div id="view-missions" class="ac-view">
+            <div style="font-size: 20px; font-weight: 600; margin-bottom: 10px; border-bottom: 1px solid var(--ac-base); padding-bottom: 5px;">SORTIE / MISSIONS</div>
+            <div id="ui-mission-list" style="display: flex; flex-direction: column; gap: 10px;">
+                <!-- 动态生成 -->
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 底部控制栏 -->
+    <div id="ac-bottom-bar" class="interactive-layer">
+        <div></div>
+        <div>
+            <input type="file" id="bg-upload" accept="image/*" style="display: none;">
+            <button class="upload-btn" onclick="document.getElementById('bg-upload').click()">
+                <i data-lucide="image" size="14"></i> 自定义背景
+            </button>
+        </div>
+    </div>
+</div>
+</div><!-- /#ac6-outer -->
+
+<script>
+    // 初始化图标
+    lucide.createIcons();
+
+    // ================= UI 交互逻辑 =================
+    const navBtns = document.querySelectorAll('.nav-btn');
+    const views = document.querySelectorAll('.ac-view');
+
+    navBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            // 移除所有 active
+            navBtns.forEach(b => b.classList.remove('active'));
+            views.forEach(v => v.classList.remove('active'));
+            
+            // 添加当前 active
+            btn.classList.add('active');
+            const targetId = btn.getAttribute('data-target');
+            document.getElementById(targetId).classList.add('active');
+        });
+    });
+
+    // 自定义背景上传逻辑
+    document.getElementById('bg-upload').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                document.getElementById('ac-bg-layer').style.backgroundImage = `url(${event.target.result})`;
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+
+    // ================= 数据抓取与渲染逻辑 =================
+    
+    // 安全获取嵌套对象属性的辅助函数
+    const getVal = (obj, path, def = '-') => {
+        try {
+            return path.split('.').reduce((o, i) => o[i], obj) ?? def;
+        } catch (e) {
+            return def;
+        }
+    };
+
+    // 格式化数字加逗号
+    const fmtNum = (num) => Number(num).toLocaleString();
+
+    async function fetchAndRenderData() {
+        try {
+            // 1. 获取最新消息ID
+            if (typeof getLastMessageId !== 'function') return;
+            const lastId = getLastMessageId();
+            
+            // 2. 获取AI消息
+            if (typeof getChatMessages !== 'function') return;
+            const msgs = getChatMessages('0-' + lastId, { role: 'assistant' });
+            if (!msgs || msgs.length === 0) return;
+            const targetMsg = msgs[msgs.length - 1];
+
+            // 3. 提取变量数据
+            let rawData = null;
+            if (typeof Mvu !== 'undefined' && typeof Mvu.getMvuData === 'function') {
+                rawData = Mvu.getMvuData({ type: 'message', message_id: targetMsg.message_id });
+            } else if (typeof getVariables === 'function') {
+                rawData = getVariables({ type: 'message', message_id: targetMsg.message_id });
+            }
+
+            if (!rawData) return;
+
+            // 适配 schema 结构 (可能是 rawData.stat_data 或直接是 rawData)
+            const data = rawData.stat_data || rawData;
+
+            // 4. 渲染 UI
+            renderUI(data);
+
+        } catch (error) {
+            console.error("AC6 UI Data Fetch Error:", error);
+        }
+    }
+
+    function renderUI(data) {
+        // --- 顶部资源 ---
+        document.getElementById('ui-cage').innerText = fmtNum(getVal(data, '主角.资金.CAGE', 0));
+        document.getElementById('ui-krl').innerText = getVal(data, '主角.驾驶属性.KRL等级', 1);
+
+        // --- 状态总览 ---
+        document.getElementById('ui-pilot-rank').innerText = getVal(data, '主角.驾驶属性.驾驶分档', 'UNKNOWN');
+        
+        const hp = getVal(data, '主角.主角状态栏.HP值', 100);
+        document.getElementById('ui-hp').innerText = hp;
+        document.getElementById('bar-hp').style.width = `${hp}%`;
+        document.getElementById('bar-hp').style.background = hp < 30 ? 'var(--ac-alert)' : 'var(--ac-light)';
+
+        const sp = getVal(data, '主角.主角状态栏.SP值', 100);
+        document.getElementById('ui-sp').innerText = sp;
+        document.getElementById('bar-sp').style.width = `${sp}%`;
+
+        document.getElementById('ui-apm').innerText = getVal(data, '主角.驾驶属性.APM', 0);
+        const syncRate = getVal(data, '主角.驾驶属性.神经同步率', 0);
+        const syncMax = getVal(data, '主角.驾驶属性._最大同步上限', 60);
+        document.getElementById('ui-sync').innerText = `${syncRate} / ${syncMax}%`;
+        document.getElementById('ui-hero-rapport').innerText = getVal(data, '主角.默契度', 0);
+
+        const shieldCur = getVal(data, '主角.珂若尔护盾.现', 10);
+        const shieldMax = getVal(data, '主角.珂若尔护盾.满', 10);
+        document.getElementById('ui-shield-cur').innerText = shieldCur;
+        document.getElementById('ui-shield-max').innerText = shieldMax;
+        const shieldPct = shieldMax > 0 ? (shieldCur / shieldMax * 100) : 0;
+        document.getElementById('bar-shield').style.width = shieldPct + '%';
+        document.getElementById('bar-shield').style.background = shieldPct < 30 ? 'var(--ac-alert)' : '#4ae28a';
+
+        const syncActive = getVal(data, '交感同操.启用状态', false);
+        const syncStatusEl = document.getElementById('ui-sync-status');
+        if (syncActive) {
+            syncStatusEl.innerText = 'ONLINE';
+            syncStatusEl.style.color = 'var(--ac-light)';
+            syncStatusEl.style.textShadow = '0 0 5px var(--ac-light)';
+        } else {
+            syncStatusEl.innerText = 'OFFLINE';
+            syncStatusEl.style.color = 'var(--ac-base)';
+            syncStatusEl.style.textShadow = 'none';
+        }
+        document.getElementById('ui-sync-eff').innerText = getVal(data, '交感同操.共鸣效率', '-');
+        const contactType = getVal(data, '交感同操.接触方式', '-');
+        const contactTypeEl = document.getElementById('ui-contact-type');
+        contactTypeEl.innerText = contactType;
+        contactTypeEl.style.color = contactType !== '-' ? 'var(--ac-light)' : 'var(--ac-base)';
+
+        // --- AC 整备 (机库) ---
+        const currentMechName = getVal(data, '机库.当前驾驶机甲', '');
+        const mechData = getVal(data, `机库.机甲泊位.${currentMechName}`, null);
+
+        const partsListEl = document.getElementById('ui-parts-list');
+        if (mechData) {
+            const overview = mechData.机甲总览 || {};
+            const build = mechData.构建 || {};
+            const weapons = mechData.武器挂载 || {};
+
+            partsListEl.innerHTML = `
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">R-ARM WEAPON</div>
+                    <div class="part-name">${getVal(weapons, '主武器槽.武器名', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">L-ARM WEAPON</div>
+                    <div class="part-name">${getVal(weapons, '副武器槽.武器名', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">HEAD</div>
+                    <div class="part-name">${getVal(build, 'HEAD', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">CORE</div>
+                    <div class="part-name">${getVal(build, 'CORE', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">EWR</div>
+                    <div class="part-name">${getVal(build, 'EWR', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">BOOSTER</div>
+                    <div class="part-name">${getVal(build, 'BOOSTER', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">GENERATOR</div>
+                    <div class="part-name">${getVal(build, 'GENERATOR', 'EMPTY')}</div>
+                </div>
+                <div class="part-slot panel-chamfer">
+                    <div class="part-type">LEGS</div>
+                    <div class="part-name">${getVal(build, 'LEGS', 'EMPTY')}</div>
+                </div>
+            `;
+
+            const armor = overview.装甲值 || {};
+            const struct = overview.结构值 || {};
+            const shield = overview.珂若尔护盾 || {};
+            document.getElementById('ui-mech-ap').innerText = `${fmtNum(getVal(armor, '现', 0))} / ${fmtNum(getVal(armor, '满', 0))}`;
+            document.getElementById('ui-mech-struct').innerText = `${fmtNum(getVal(struct, '现', 0))} / ${fmtNum(getVal(struct, '满', 0))}`;
+            document.getElementById('ui-mech-shield').innerText = `${fmtNum(getVal(shield, '现', 0))} / ${fmtNum(getVal(shield, '满', 0))}`;
+            document.getElementById('ui-mech-tier').innerText = getVal(overview, '装甲等级', '-');
+            document.getElementById('ui-mech-thrust').innerText = getVal(overview, '推重比', '0.00');
+            document.getElementById('ui-mech-thrust-bonus').innerText = getVal(overview, '推重加值', '0');
+            document.getElementById('ui-mech-ewr').innerText = getVal(overview, '电子战评级', '0');
+            document.getElementById('ui-mech-sensor').innerText = getVal(overview, '观测效益', '0');
+            document.getElementById('ui-mech-duration').innerText = getVal(overview, '续航回合数', '0');
+            document.getElementById('ui-mech-type').innerText = getVal(overview, '机体类型', '-');
+        } else {
+            partsListEl.innerHTML = `<div style="color:var(--ac-alert)">NO AC DATA DETECTED</div>`;
+            document.getElementById('ui-mech-ap').innerText = '0 / 0';
+            document.getElementById('ui-mech-struct').innerText = '0 / 0';
+            document.getElementById('ui-mech-shield').innerText = '0 / 0';
+            document.getElementById('ui-mech-tier').innerText = '-';
+            document.getElementById('ui-mech-thrust').innerText = '0.00';
+            document.getElementById('ui-mech-thrust-bonus').innerText = '0';
+            document.getElementById('ui-mech-ewr').innerText = '0';
+            document.getElementById('ui-mech-sensor').innerText = '0';
+            document.getElementById('ui-mech-duration').innerText = '0';
+            document.getElementById('ui-mech-type').innerText = '-';
+        }
+
+        // --- 通讯频道 ---
+        const commsData = getVal(data, '红颜通讯', {});
+        const contactListEl = document.getElementById('ui-contact-list');
+        
+        let activeContactId = contactListEl.querySelector('.active')?.dataset?.id;
+        let commsHtml = '';
+        
+        // 始终遍历所有联系人（包括陌生人状态）
+        const contactEntries = Object.entries(commsData);
+        if (contactEntries.length > 0) {
+            // 首次加载时默认选中第一个
+            if (!activeContactId || !commsData[activeContactId]) {
+                activeContactId = contactEntries[0][0];
+            }
+            for (const [id, info] of contactEntries) {
+                const isActive = id === activeContactId ? 'active' : '';
+                const hasUnread = info.未读消息数 > 0 ? 'show' : '';
+                commsHtml += `
+                    <div class="contact-item ${isActive}" data-id="${id}" onclick="selectContact(this, '${info.角色名称}', '${info.关系阶段}', ${info.好感度}, ${info.默契度}, '${info.阵营 || ''}')">
+                        <span class="contact-name">${info.角色名称 || id}</span>
+                        <div class="unread-dot ${hasUnread}"></div>
+                    </div>
+                `;
+            }
+        } else {
+            commsHtml = `<div class="contact-item"><span class="contact-name">NO SIGNAL</span></div>`;
+            activeContactId = null;
+        }
+        contactListEl.innerHTML = commsHtml;
+
+        // 重新触发当前选中联系人的详情显示（如果存在）
+        if (activeContactId && commsData[activeContactId]) {
+            const info = commsData[activeContactId];
+            const el = contactListEl.querySelector(`[data-id="${activeContactId}"]`);
+            if (el) selectContact(el, info.角色名称, info.关系阶段, info.好感度, info.默契度, info.阵营 || '');
+        }
+
+        // --- 作战与行动 ---
+        const missionsData = getVal(data, '任务面板', {});
+        const missionListEl = document.getElementById('ui-mission-list');
+        let missionHtml = '';
+
+        if (Object.keys(missionsData).length > 0) {
+            for (const [id, mission] of Object.entries(missionsData)) {
+                let statusColor = 'var(--ac-base)';
+                if (mission.进行状态 === '进行中') statusColor = 'var(--ac-light)';
+                if (mission.进行状态 === '已完成') statusColor = '#4ae28a';
+                if (mission.进行状态 === '失败') statusColor = 'var(--ac-alert)';
+
+                missionHtml += `
+                    <div class="mission-card panel-chamfer">
+                        <div style="flex: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <span class="mission-title">${mission.任务名称 || 'UNKNOWN MISSION'}</span>
+                                    <span class="mission-type">${mission.任务类型 || '-'}</span>
+                                </div>
+                                <span class="mission-status" style="color: ${statusColor};">${mission.进行状态 || 'STANDBY'}</span>
+                            </div>
+                            ${mission.目标列表 && mission.目标列表.length > 0 ? `
+                            <div style="font-size: 12px; color: var(--ac-base); margin-top: 5px;">
+                                目标: ${mission.目标列表.join(' | ')}
+                            </div>` : ''}
+                            <div style="font-size: 12px; margin-top: 3px;">
+                                <span style="color: var(--ac-base);">奖励:</span>
+                                <span>${mission.奖励资金 || 0} CAGE</span>
+                                ${mission.奖励经验 ? `<span style="margin-left: 10px;">${mission.奖励经验} EXP</span>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            missionHtml = `
+                <div class="mission-card panel-chamfer">
+                    <div style="flex:1; text-align: center; opacity: 0.4; padding: 20px 0;">
+                        <i data-lucide="target" size="24" style="margin-bottom: 5px;"></i>
+                        <div><span class="mission-title">NO ACTIVE MISSIONS</span></div>
+                        <span class="mission-status" style="color: var(--ac-base);">STANDBY</span>
+                    </div>
+                </div>
+            `;
+        }
+        missionListEl.innerHTML = missionHtml;
+        // 重新初始化新增图标的 lucide
+        lucide.createIcons();
+    }
+    window.selectContact = function(element, name, relation, favor, rapport, faction) {
+        document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
+        element.classList.add('active');
+
+        document.getElementById('ui-comm-name').innerText = `CHANNEL: ${name.toUpperCase()}`;
+
+        const body = document.querySelector('.comm-body');
+        body.innerHTML = `
+            <div style="width: 100%; height: 100%; display: flex; flex-direction: column; gap: 20px;">
+                <div style="display:flex; justify-content: space-between; border-bottom: 1px solid var(--ac-panel); padding-bottom: 10px;">
+                    <span>关系阶段: <span style="color:var(--ac-light)">${relation}</span></span>
+                    <span>好感度: <span style="color:var(--ac-light)">${favor}</span></span>
+                </div>
+                <div style="display:flex; justify-content: space-between; border-bottom: 1px solid var(--ac-panel); padding-bottom: 10px;">
+                    <span>默契度: <span style="color:var(--ac-light)">${rapport !== undefined ? rapport : 0}</span></span>
+                    ${faction ? `<span>阵营: <span style="color:var(--ac-light)">${faction}</span></span>` : ''}
+                </div>
+                <div style="flex:1; display:flex; align-items:center; justify-content:center; opacity: 0.3;">
+                    [ ENCRYPTED COMM LOGS ]
+                </div>
+            </div>
+        `;
+    };
+
+    // 启动轮询 (每2秒更新一次数据)
+    setInterval(fetchAndRenderData, 2000);
+    // 初始执行一次
+    setTimeout(fetchAndRenderData, 500);
+
+</script>
+</body>
+</html>
