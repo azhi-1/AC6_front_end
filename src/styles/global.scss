@@ -23,6 +23,8 @@ html, body {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
+  /* 让 body.scrollHeight 有可测量的基准高度，iframe 才能被撑开 */
+  min-height: 520px;
   background: transparent;
   font-family: var(--font-main);
   color: var(--ac-light);
@@ -30,15 +32,15 @@ html, body {
 
 #app {
   width: 100%;
-  min-height: 0;
+  min-height: inherit;
   position: relative;
 }
 
 #ac6-outer {
   position: relative;
   width: 100%;
+  min-height: 520px;
   aspect-ratio: 16 / 9;
-  min-height: 400px;
   overflow: hidden;
   background-image: url('https://cdn.imgchest.com/files/d9a8e989a3d3.png');
   background-size: cover;

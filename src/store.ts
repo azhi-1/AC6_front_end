@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { klona } from '@openweb3/router';
+import { klona } from 'klona';
 
 interface StatData {
   全局信息?: {
